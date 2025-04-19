@@ -21,11 +21,11 @@ class StopBus(models.Model):
     code = models.IntegerField()
     name = models.CharField(max_length=100)
     address = models.CharField(max_length=200)
-    route = models.ForeignKey(Route)
+    route = models.ForeignKey(Route, on_delete=models.CASCADE)
 
 
 class Vehicle(models.Model):
-    route = models.ForeignKey(Route, null=True)
+    route = models.ForeignKey(Route, null=True, on_delete=models.SET_NULL)
     acessible = models.BooleanField()
     prefix = models.IntegerField()
 
@@ -34,5 +34,5 @@ class Trajectory(models.Model):
     latitude = models.DecimalField(max_digits=11, decimal_places=9)
     longitude = models.DecimalField(max_digits=11, decimal_places=9)
     datetime = models.DateTimeField()
-    vehicle = models.ForeignKey(Vehicle)
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE)
     point = models.PointField(srid=4326, null=True)
