@@ -1,5 +1,5 @@
 from sptrans.v0 import Client
-from models import Route, StopBus, Vehicle, Trajectory
+from .models import Route, StopBus, Vehicle, Trajectory
 from datetime import datetime
 
 TOKEN = '153bc35d149b8a337da0881349e2d297f149c3421c500c4ebcb038ae3e4b60d5'
