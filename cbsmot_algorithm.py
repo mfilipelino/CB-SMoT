@@ -1,8 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-CB-SMoT algorithm implementation extracted from the Django project.
-This file contains the core algorithm functions without Django dependencies.
+CB-SMoT (Clustering-Based Stops and Moves of Trajectories) Algorithm
+
+This is an implementation of the CB-SMoT algorithm for discovering interesting places
+in trajectories based on the variation of speed. The algorithm was proposed by:
+
+Palma, A. T., Bogorny, V., Kuijpers, B., & Alvares, L. O. (2008). 
+"A clustering-based approach for discovering interesting places in trajectories." 
+In Proceedings of the 2008 ACM symposium on Applied computing (pp. 863-868).
+
+Alvares, L. O., Bogorny, V., Kuijpers, B., de Macedo, J. A. F., Moelans, B., & Vaisman, A. (2007).
+"A model for enriching trajectories with semantic geographical information."
+In Proceedings of the 15th annual ACM international symposium on Advances in geographic information systems (pp. 1-8).
+
+This file contains the core algorithm functions without Django dependencies, extracted from the
+original Django project for better testability and reuse.
 """
 
 import math
@@ -61,15 +74,33 @@ class Stop(object):
 
 def cbsmot(trajectorys, max_average_speed, min_time):
     """
-    CB-SMoT algorithm implementation
+    CB-SMoT algorithm implementation for detecting stops in a trajectory.
+    
+    The algorithm works by analyzing the speed between consecutive points in a trajectory.
+    When the speed falls below a threshold (max_average_speed) for a minimum duration (min_time),
+    the algorithm identifies this segment as a stop.
+    
+    The algorithm is based on the papers:
+    - Palma et al. (2008) "A clustering-based approach for discovering interesting places in trajectories"
+    - Alvares et al. (2007) "A model for enriching trajectories with semantic geographical information"
     
     Parameters:
     trajectorys - List of trajectory points with datetime and point attributes
+                 Each trajectory point must have:
+                 - datetime: timestamp of the point
+                 - point: object with x and y attributes (longitude and latitude)
     max_average_speed - Maximum average speed (m/s) to consider a stop
+                       Points with speed below this threshold are candidates for stops
     min_time - Minimum time (seconds) to consider a valid stop
+              Only segments where the object stayed for at least this duration are considered stops
     
     Returns:
-    List of Stop objects
+    List of Stop objects, each containing:
+    - trajectorys: list of trajectory points in this stop
+    - init_time: timestamp when the stop started
+    - last_time: timestamp when the stop ended
+    - delta_time: duration of the stop in seconds
+    - dist: total distance covered during the stop
     """
     if not trajectorys:
         return []
