@@ -36,3 +36,16 @@ class Trajectory(models.Model):
     datetime = models.DateTimeField()
     vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE)
     point = models.PointField(srid=4326, null=True)
+
+
+class DetectedSegment(models.Model):
+    vehicle = models.ForeignKey(Vehicle, null=True, on_delete=models.SET_NULL)
+    route = models.ForeignKey(Route, null=True, on_delete=models.SET_NULL)
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    duration_seconds = models.FloatField()
+    distance_meters = models.FloatField()
+    num_points = models.IntegerField()
+    average_speed_mps = models.FloatField()
+    trajectory_points = models.ManyToManyField(Trajectory)
+    segment_geometry = models.LineStringField(srid=4326, null=True)
