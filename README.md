@@ -1,98 +1,100 @@
 # CB-SMoT
-The CB-SMoT (Clustering-Based Approach for Discovering Interesting Places in a Single Trajectory)
 
-## Identificação semântica de regiões de congestionamento no transporte público da cidade de São Paulo, utilizando API Olho Vivo
+CB-SMoT (Clustering-Based Stops and Moves of Trajectories) applied to São Paulo public-transport GPS traces. Detects low-speed segments in bus trajectories, clusters recurrent segments into hotspot regions, and produces statistical summaries.
+
 Slides: [CB-SMoT Project Presentation](https://drive.google.com/open?id=108H7DcA4e-1lTS9Nd5uoH5anfThruVe14oZFPv1kka0)
 
-## Data Analysis and Reporting Enhancements
+## Design
 
-This project has been enhanced with new features focused on persistent storage of detected low-speed segments, streamlined data processing, and comprehensive statistical reporting. These additions significantly improve the project's data science capabilities by enabling:
+The pipeline is file-based and framework-light: Parquet in, Parquet out. Core dependencies are pandas, pyarrow, shapely, and scikit-learn.
 
-*   **Structured Analysis:** Storing detected segments in a database allows for more organized and repeatable analysis.
-*   **Feature Engineering:** The attributes of detected segments (e.g., duration, average speed, geometry) can serve as features for further machine learning models or deeper data mining.
-*   **Quantitative Insights:** Statistical reports provide measurable insights into traffic patterns, congestion hotspots, and operational characteristics of public transport.
-*   **Historical Tracking:** Persisting segments allows for tracking changes and trends over time if data is processed periodically.
-
-### New Django Model: `DetectedSegment`
-
-This model is designed to store the low-speed or "stop" segments identified from vehicle trajectories by the CB-SMoT algorithm.
-
-**Key Fields:**
-
-*   `vehicle`: A foreign key to the `Vehicle` model, indicating which vehicle generated the segment.
-*   `route`: A foreign key to the `Route` model, indicating the route the vehicle was on (if available).
-*   `start_time`: DateTimeField indicating the beginning of the segment.
-*   `end_time`: DateTimeField indicating the end of the segment.
-*   `duration_seconds`: FloatField storing the segment's duration in seconds.
-*   `distance_meters`: FloatField storing the distance covered within the segment in meters.
-*   `num_points`: IntegerField for the number of trajectory points that constitute the segment.
-*   `average_speed_mps`: FloatField for the calculated average speed within the segment in meters per second.
-*   `trajectory_points`: A ManyToManyField linking to the `Trajectory` model, storing the actual points that make up this segment.
-*   `segment_geometry`: A LineStringField (GIS) storing the geographical path of the segment.
-
-### New Management Commands
-
-Two new Django management commands have been introduced to facilitate the processing and analysis of trajectory data.
-
-#### 1. `process_trajectories`
-
-This command processes raw trajectory data (assumed to be populated in the `Trajectory` model) using the underlying CB-SMoT algorithm. It identifies low-speed segments and saves them as `DetectedSegment` instances in the database.
-
-**Key Command-Line Arguments:**
-
-*   `--vehicle_ids <id1> <id2> ...`: Process trajectories only for the specified vehicle IDs.
-*   `--route_ids <id1> <id2> ...`: Process trajectories for all vehicles associated with the specified route IDs. (Ignored if `--vehicle_ids` is used).
-*   `--max_speed <float>`: Sets the maximum average speed in meters per second for a sequence of points to be considered a low-speed segment. Default: `3.0`.
-*   `--min_time <float>`: Sets the minimum time duration in seconds for a low-speed segment to be considered valid. Default: `60.0`.
-*   `--clear_existing`: If provided, all previously stored `DetectedSegment` records will be deleted before processing new ones.
-
-**Example Usage:**
-
-To process trajectories using a maximum speed of 2.5 m/s and a minimum segment duration of 90 seconds:
-```bash
-python manage.py process_trajectories --max_speed 2.5 --min_time 90
+```
+SPTrans API  ──► cbsmot ingest ──►  trajectories.parquet
+                                           │
+                                           ▼
+                                   cbsmot process  ──► segments.parquet
+                                           │                   │
+                                           ▼                   ▼
+                                   cbsmot regions        cbsmot report
+                                           │
+                                           ▼
+                                   regions.parquet
 ```
 
-To process trajectories only for vehicle IDs 101 and 102:
+- **`cbsmot/algorithm.py`** — the pure CB-SMoT algorithm; no I/O, no dependencies.
+- **`cbsmot/ingest.py`** — polls SPTrans Olho Vivo for vehicle positions and writes a trajectory Parquet. The poll time is stored as `datetime`; the raw API timestamp is preserved as `source_datetime`.
+- **`cbsmot/process.py`** — reads a trajectory Parquet, groups points by vehicle, runs the algorithm, writes a segment Parquet with WKT geometries.
+- **`cbsmot/regions.py`** — clusters segment centroids with DBSCAN to recover recurrent stop regions.
+- **`cbsmot/report.py`** — aggregates a segment Parquet into summary statistics.
+- **`cbsmot/cli.py`** — `python -m cbsmot ingest | process | regions | report` entry point.
+
+## Input schema (`trajectories.parquet`)
+
+| column        | type      | notes                                  |
+|---------------|-----------|----------------------------------------|
+| `vehicle_id`  | int       | stable per-vehicle identifier          |
+| `route_id`    | int/null  | route the vehicle was serving, if any  |
+| `datetime`    | timestamp | poll-observation time used for segmentation |
+| `source_datetime` | timestamp/null | raw SPTrans `ta` timestamp, preserved for provenance |
+| `latitude`    | float     | decimal degrees (WGS84)                |
+| `longitude`   | float     | decimal degrees (WGS84)                |
+
+## Output schema (`segments.parquet`)
+
+`vehicle_id`, `route_id`, `start_time`, `end_time`, `duration_seconds`, `distance_meters`, `num_points`, `average_speed_mps`, `geometry_wkt` (LINESTRING).
+
+## Usage
+
 ```bash
-python manage.py process_trajectories --vehicle_ids 101 102
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Collect trajectories by polling SPTrans for 1 hour (requires a token).
+export SPTRANS_TOKEN=your_token_here
+python -m cbsmot ingest trajectories.parquet \
+    --routes 8000 8100 --duration 3600 --interval 15
+
+# Detect segments.
+python -m cbsmot process trajectories.parquet segments.parquet \
+    --max-speed 2.5 --min-time 90
+
+# Cluster recurrent regions from the detected segments.
+python -m cbsmot regions segments.parquet regions.parquet \
+    --eps-meters 150 --min-samples 3
+
+# Restrict to specific vehicles or routes.
+python -m cbsmot process trajectories.parquet segments.parquet \
+    --vehicle-ids 101 102
+
+# Summarize.
+python -m cbsmot report segments.parquet --top-n-routes 10
 ```
 
-#### 2. `report_segments`
+Obtain an SPTrans API token at <https://www.sptrans.com.br/desenvolvedores/>.
 
-This command generates a statistical report based on the `DetectedSegment` data stored in the database. It provides insights into the characteristics and distribution of detected low-speed segments.
+Programmatic use:
 
-**Statistics Provided:**
+```python
+import pandas as pd
+from cbsmot.process import detect_segments
+from cbsmot.regions import cluster_regions
+from cbsmot.report import build_report
 
-*   Overall averages: Total segments, average duration, average speed, average number of points per segment, and total distance covered by segments.
-*   Top N routes: Lists routes with the highest number of detected segments.
-*   Hourly distribution: Shows the number of segments that started in each hour of the day.
+trajectories = pd.read_parquet("trajectories.parquet")
+segments = detect_segments(trajectories, max_speed=2.5, min_time=90)
+segments.to_parquet("segments.parquet", index=False)
+regions = cluster_regions(segments, eps_meters=150, min_samples=3)
+regions.to_parquet("regions.parquet", index=False)
 
-**Key Command-Line Arguments:**
-
-*   `--top_n_routes <int>`: Customizes the number of top routes to display in the report. Default: `5`.
-
-**Example Usage:**
-
-To generate a report showing the top 3 routes by segment count:
-```bash
-python manage.py report_segments --top_n_routes 3
+report = build_report("segments.parquet", top_n_routes=10)
 ```
 
-To generate a report with default settings:
+## Tests
+
 ```bash
-python manage.py report_segments
+python -m unittest discover -s tests
 ```
 
-### Typical Workflow
+## Algorithm notes
 
-1.  **Data Population:** Ensure that vehicle trajectory data is loaded into the system's `Trajectory` model. (This step is typically handled by other processes, e.g., `populate_database` or `run_service_tracks` based on existing commands).
-2.  **Process Trajectories:** Run the `process_trajectories` command to analyze the raw trajectories. This will identify low-speed segments and populate the `DetectedSegment` table in the database.
-    ```bash
-    python manage.py process_trajectories --max_speed 2.0 --min_time 120
-    ```
-3.  **Generate Report:** After processing, run the `report_segments` command to generate statistical insights from the newly populated `DetectedSegment` data.
-    ```bash
-    python manage.py report_segments --top_n_routes 10
-    ```
-This workflow allows users to transform raw GPS tracks into actionable insights about low-speed events, potentially indicating congestion or operational stops, and then quantify these events through statistical summaries.
+Segmentation uses the poll-observation timestamp stored in `datetime`, not the raw SPTrans `ta`, because `ta` can repeat while a bus is stationary. A point joins the current stop only when the gap to the previous point is under `max_gap` seconds and the instantaneous speed is under `max_speed`; duplicate stationary fixes with zero elapsed time do not break an in-progress stop. The gap bound prevents sparse data from inflating a segment. A stop is emitted only if its accumulated duration exceeds `min_time`. All distances use haversine and are reported in meters; speeds are meters per second.
